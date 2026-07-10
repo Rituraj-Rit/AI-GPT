@@ -61,6 +61,7 @@ function initSocketServer(httpServer) {
         },
       });
 
+      console.log(memory);
 
       await createMemory({
         vectors,
@@ -72,7 +73,6 @@ function initSocketServer(httpServer) {
         },
       });
 
-      
       console.log(memory);
 
       // 3. Get latest chat history
@@ -80,38 +80,40 @@ function initSocketServer(httpServer) {
         .find({ chat: messagePayload.chat })
         .sort({ createdAt: 1 }) // oldest -> newest
         .lean();
-
-      // 4. If history is empty, use current message
-      let contents;
+      let stm;
 
       if (chatHistory.length === 0) {
-        contents = [
+        stm = [
           {
             role: "user",
             parts: [{ text: messagePayload.contents }],
           },
         ];
       } else {
-        contents = chatHistory.map((item) => ({
+        stm = chatHistory.map((item) => ({
           role: item.role,
           parts: [{ text: item.content }],
         }));
       }
 
+      const ltm = [
+        {
+          role: "user",
+          parts: [
+            {
+              text: `These are some previous memories:\n${memory
+                .map((item) => item.metadata.text)
+                .join("\n")}`,
+            },
+          ],
+        },
+      ];
+
+      console.log(ltm, stm)
       // 5. Gemini response
-      const response = await aiService.generateResponse(
-        chatHistory.length > 0
-          ? chatHistory.map((item) => ({
-              role: item.role,
-              parts: [{ text: item.content }],
-            }))
-          : [
-              {
-                role: "user",
-                parts: [{ text: messagePayload.contents }],
-              },
-            ],
-      );
+
+      const contents = [...ltm, ...stm];
+      const response = await aiService.generateResponse(contents);
 
       const responseMessage = await messageModel.create({
         chat: messagePayload.chat,
