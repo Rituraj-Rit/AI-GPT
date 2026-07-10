@@ -8,7 +8,8 @@ const cookie = require("cookie");
 const jwt = require("jsonwebtoken");
 const userModel = require("../models/user.mode");
 const aiService = require("../services/ai.service");
-const messageModel = require('../models/message.model')
+const messageModel = require("../models/message.model");
+const { createMemory, queryMemory } = require("../services/vector.service");
 
 function initSocketServer(httpServer) {
   const io = new Server(httpServer, {});
@@ -39,31 +40,98 @@ function initSocketServer(httpServer) {
         messagePayload = JSON.parse(messagePayload);
       }
 
-      await messageModel.create({
+      // 1. Save user message
+      const message = await messageModel.create({
         chat: messagePayload.chat,
         user: socket.user._id,
-        content: messagePayload.content,
-        role: "user"
-      })
+        content: messagePayload.contents,
+        role: "user",
+      });
 
-      const chatHistory = await messageModel.find({
-        chat: messagePayload.chat
-      }).sort({ createdAt: -1 }).limit(20).lean().reverse();
+      // 2. Generate vector
+      const vectors = await aiService.generateVector(messagePayload.contents);
 
-      const response = await aiService.generateResponse(chatHistory.map(item=>{
-        return {
+      // console.log(vectors);
+
+      const memory = await queryMemory({
+        queryVector: vectors,
+        limit: 3,
+        metadata: {
+          user: socket.user._id.toString(),
+        },
+      });
+
+
+      await createMemory({
+        vectors,
+        messageId: message._id,
+        metadata: {
+          chat: messagePayload.chat,
+          user: socket.user._id.toString(),
+          text: messagePayload.contents,
+        },
+      });
+
+      
+      console.log(memory);
+
+      // 3. Get latest chat history
+      let chatHistory = await messageModel
+        .find({ chat: messagePayload.chat })
+        .sort({ createdAt: 1 }) // oldest -> newest
+        .lean();
+
+      // 4. If history is empty, use current message
+      let contents;
+
+      if (chatHistory.length === 0) {
+        contents = [
+          {
+            role: "user",
+            parts: [{ text: messagePayload.contents }],
+          },
+        ];
+      } else {
+        contents = chatHistory.map((item) => ({
           role: item.role,
-          parts: [{text: item.content}]
-        }
-      }));
+          parts: [{ text: item.content }],
+        }));
+      }
 
-      await messageModel.create({
+      // 5. Gemini response
+      const response = await aiService.generateResponse(
+        chatHistory.length > 0
+          ? chatHistory.map((item) => ({
+              role: item.role,
+              parts: [{ text: item.content }],
+            }))
+          : [
+              {
+                role: "user",
+                parts: [{ text: messagePayload.contents }],
+              },
+            ],
+      );
+
+      const responseMessage = await messageModel.create({
         chat: messagePayload.chat,
         user: socket.user._id,
         content: response,
-        role: "model"
-      })
-      
+        role: "model",
+      });
+
+      const responseVectors = await aiService.generateVector(response);
+
+      await createMemory({
+        vectors: responseVectors,
+        messageId: responseMessage._id,
+        metadata: {
+          chat: messagePayload.chat,
+          user: socket.user._id,
+          text: response,
+        },
+      });
+      // 7. Send response
       socket.emit("ai-response", {
         chat: messagePayload.chat,
         content: response,
