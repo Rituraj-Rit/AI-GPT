@@ -12,7 +12,13 @@ const messageModel = require("../models/message.model");
 const { createMemory, queryMemory } = require("../services/vector.service");
 
 function initSocketServer(httpServer) {
-  const io = new Server(httpServer, {});
+  const io = new Server(httpServer, {
+     cors: {
+            origin: "http://localhost:5173",
+            allowedHeaders: [ "Content-Type", "Authorization" ],
+            credentials: true
+        }
+  });
 
   // Day - 151
   io.use(async (socket, next) => {
@@ -35,6 +41,7 @@ function initSocketServer(httpServer) {
   });
 
   io.on("connection", (socket) => {
+    // console.log("User connected",socket.user.id);
     socket.on("ai-message", async (messagePayload) => {
       if (typeof messagePayload === "string") {
         messagePayload = JSON.parse(messagePayload);
